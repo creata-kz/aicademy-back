@@ -5,8 +5,9 @@ from uuid import UUID
 
 class UserOut(BaseModel):
     id: UUID
-    telegram_id: int
+    telegram_id: int | None = None
     telegram_username: str | None = None
+    email: str | None = None
     first_name: str
     last_name: str | None = None
     photo_url: str | None = None

@@ -3,13 +3,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.config import settings
-from app.schemas.auth import TelegramAuthRequest, DevAuthRequest, TelegramWidgetAuth, AuthResponse
+from app.schemas.auth import (
+    TelegramAuthRequest,
+    DevAuthRequest,
+    TelegramWidgetAuth,
+    RegisterRequest,
+    LoginRequest,
+    AuthResponse,
+)
 from app.schemas.user import UserOut
 from app.services.auth_service import (
     validate_telegram_init_data,
     validate_telegram_login_widget,
     create_access_token,
     get_or_create_user,
+    get_or_create_email_user,
+    authenticate_email_user,
 )
 from app.api.deps import get_current_user
 from app.models.user import User
@@ -81,6 +90,50 @@ async def auth_telegram_widget(body: TelegramWidgetAuth, db: AsyncSession = Depe
         token=token,
         user=UserOut.model_validate(user),
         is_new_user=is_new_user,
+    )
+
+
+@router.post("/register", response_model=AuthResponse)
+async def register_email(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    """Register a new user with email and password."""
+    user, is_new = await get_or_create_email_user(
+        db,
+        email=body.email,
+        password=body.password,
+        first_name=body.first_name,
+        last_name=body.last_name,
+    )
+
+    if not is_new:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already registered",
+        )
+
+    token = create_access_token(user.id, user.telegram_id, user.role.value)
+    return AuthResponse(
+        token=token,
+        user=UserOut.model_validate(user),
+        is_new_user=True,
+    )
+
+
+@router.post("/login", response_model=AuthResponse)
+async def login_email(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+    """Login with email and password."""
+    user = await authenticate_email_user(db, body.email, body.password)
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
+
+    token = create_access_token(user.id, user.telegram_id, user.role.value)
+    return AuthResponse(
+        token=token,
+        user=UserOut.model_validate(user),
+        is_new_user=False,
     )
 
 

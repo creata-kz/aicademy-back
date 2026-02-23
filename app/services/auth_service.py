@@ -6,12 +6,21 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
 from uuid import UUID
 
+import bcrypt
 import jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.user import User, UserRole
+
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode(), hashed.encode())
 
 
 def validate_telegram_init_data(init_data: str) -> dict | None:
@@ -86,14 +95,15 @@ def validate_telegram_login_widget(data: dict) -> dict | None:
     return data
 
 
-def create_access_token(user_id: UUID, telegram_id: int, role: str) -> str:
+def create_access_token(user_id: UUID, telegram_id: int | None, role: str) -> str:
     payload = {
         "sub": str(user_id),
-        "telegram_id": telegram_id,
         "role": role,
         "exp": datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_EXPIRE_MINUTES),
         "iat": datetime.now(timezone.utc),
     }
+    if telegram_id is not None:
+        payload["telegram_id"] = telegram_id
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
@@ -140,3 +150,44 @@ async def get_or_create_user(
     await db.commit()
     await db.refresh(user)
     return user, True
+
+
+async def get_or_create_email_user(
+    db: AsyncSession,
+    email: str,
+    password: str,
+    first_name: str,
+    last_name: str | None = None,
+) -> tuple[User, bool]:
+    """Register a new email user. Returns (user, True) or raises if email exists."""
+    result = await db.execute(select(User).where(User.email == email))
+    existing = result.scalar_one_or_none()
+    if existing:
+        return existing, False  # email already taken
+
+    user = User(
+        email=email.lower().strip(),
+        password_hash=hash_password(password),
+        first_name=first_name,
+        last_name=last_name,
+        role=UserRole.student,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user, True
+
+
+async def authenticate_email_user(
+    db: AsyncSession,
+    email: str,
+    password: str,
+) -> User | None:
+    """Verify email+password credentials. Returns user or None."""
+    result = await db.execute(select(User).where(User.email == email.lower().strip()))
+    user = result.scalar_one_or_none()
+    if not user or not user.password_hash:
+        return None
+    if not verify_password(password, user.password_hash):
+        return None
+    return user
