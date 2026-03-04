@@ -6,6 +6,7 @@ import json
 class Settings(BaseSettings):
     DATABASE_URL: str
     TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_BOT_USERNAME: str = "aiacademy_test_bot"
     JWT_SECRET: str = "super-secret-jwt-key-change-in-production"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 60

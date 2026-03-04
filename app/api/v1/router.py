@@ -7,6 +7,7 @@ from app.api.v1.lessons import router as lessons_router
 from app.api.v1.progress import router as progress_router
 from app.api.v1.onboarding import router as onboarding_router
 from app.api.v1.notifications import router as notifications_router
+from app.api.v1.bot import router as bot_router
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -17,3 +18,4 @@ api_router.include_router(lessons_router)
 api_router.include_router(progress_router)
 api_router.include_router(onboarding_router)
 api_router.include_router(notifications_router)
+api_router.include_router(bot_router)
