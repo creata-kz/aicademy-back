@@ -18,7 +18,7 @@ def _cleanup():
         del _auth_sessions[k]
 
 
-def create_auth_session() -> str:
+def create_auth_session(return_url: str = "") -> str:
     """Create a new auth session, return the token."""
     _cleanup()
     token = secrets.token_urlsafe(32)
@@ -27,6 +27,7 @@ def create_auth_session() -> str:
         "telegram_user": None,
         "status": "pending",
         "created_at": time.time(),
+        "return_url": return_url,
     }
     return token
 
@@ -154,8 +155,24 @@ async def handle_update(update: dict):
                     "username": user.get("username"),
                 })
                 await answer_callback_query(callback_id, "Logged in!")
+                return_url = session.get("return_url", "")
                 if chat_id and message_id:
-                    await edit_message_text(chat_id, message_id, "You are now logged in to <b>AI Academy</b>!")
+                    if return_url:
+                        await edit_message_text(chat_id, message_id, "You are logged in! Return to the website.")
+                        await send_telegram_message(
+                            chat_id,
+                            "Tap the button below to go back:",
+                            reply_markup={
+                                "inline_keyboard": [[
+                                    {
+                                        "text": "Open AI Academy",
+                                        "url": return_url,
+                                    }
+                                ]]
+                            },
+                        )
+                    else:
+                        await edit_message_text(chat_id, message_id, "You are now logged in to <b>AI Academy</b>! Return to your browser.")
             else:
                 await answer_callback_query(callback_id, "Session expired")
 

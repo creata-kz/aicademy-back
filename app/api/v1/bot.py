@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -23,11 +24,14 @@ async def telegram_webhook(request: Request):
     return {"ok": True}
 
 
+class TelegramBotInitRequest(BaseModel):
+    return_url: str = ""
+
+
 @router.post("/auth/telegram-bot/init")
-async def init_telegram_bot_auth():
+async def init_telegram_bot_auth(body: TelegramBotInitRequest = TelegramBotInitRequest()):
     """Create an auth session for Telegram bot login. Returns token and bot URL."""
-    token = create_auth_session()
-    bot_username = settings.TELEGRAM_BOT_TOKEN.split(":")[0]  # fallback
+    token = create_auth_session(return_url=body.return_url)
     return {
         "token": token,
         "bot_url": f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}?start=auth_{token}",
