@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 60
     DEV_MODE: bool = False
+    RESEND_API_KEY: str = ""
+    FROM_EMAIL: str = "AI Academy <noreply@aicademy.kz>"
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
     @field_validator("CORS_ORIGINS", mode="before")

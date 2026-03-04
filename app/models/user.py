@@ -26,6 +26,7 @@ class User(Base):
     telegram_username: Mapped[str | None] = mapped_column(String, nullable=True)
     email: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     first_name: Mapped[str] = mapped_column(String, nullable=False)
     last_name: Mapped[str | None] = mapped_column(String, nullable=True)
     photo_url: Mapped[str | None] = mapped_column(String, nullable=True)

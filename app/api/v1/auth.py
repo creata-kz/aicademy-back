@@ -9,6 +9,11 @@ from app.schemas.auth import (
     TelegramWidgetAuth,
     RegisterRequest,
     LoginRequest,
+    VerifyEmailRequest,
+    ResendCodeRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+    MessageResponse,
     AuthResponse,
 )
 from app.schemas.user import UserOut
@@ -19,7 +24,12 @@ from app.services.auth_service import (
     get_or_create_user,
     get_or_create_email_user,
     authenticate_email_user,
+    create_verification_code,
+    verify_email_code,
+    can_resend_code,
+    hash_password,
 )
+from app.services.email_service import send_verification_code, send_password_reset_code
 from app.api.deps import get_current_user
 from app.models.user import User
 
@@ -93,9 +103,9 @@ async def auth_telegram_widget(body: TelegramWidgetAuth, db: AsyncSession = Depe
     )
 
 
-@router.post("/register", response_model=AuthResponse)
+@router.post("/register", response_model=MessageResponse)
 async def register_email(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    """Register a new user with email and password."""
+    """Register a new user with email and password. Sends verification code."""
     user, is_new = await get_or_create_email_user(
         db,
         email=body.email,
@@ -110,11 +120,61 @@ async def register_email(body: RegisterRequest, db: AsyncSession = Depends(get_d
             detail="Email already registered",
         )
 
+    # Generate and send verification code
+    code = await create_verification_code(db, body.email)
+    send_verification_code(body.email, code)
+
+    return MessageResponse(
+        message="Verification code sent to your email",
+        email=body.email,
+    )
+
+
+@router.post("/verify-email", response_model=AuthResponse)
+async def verify_email(body: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    """Verify email with 6-digit code. Returns JWT on success."""
+    valid = await verify_email_code(db, body.email, body.code)
+
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification code",
+        )
+
+    # Get the verified user
+    from sqlalchemy import select
+    result = await db.execute(select(User).where(User.email == body.email.lower().strip()))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
     token = create_access_token(user.id, user.telegram_id, user.role.value)
     return AuthResponse(
         token=token,
         user=UserOut.model_validate(user),
         is_new_user=True,
+    )
+
+
+@router.post("/resend-code", response_model=MessageResponse)
+async def resend_code(body: ResendCodeRequest, db: AsyncSession = Depends(get_db)):
+    """Resend verification code. Rate limited: max 3 per 10 minutes."""
+    if not await can_resend_code(db, body.email):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many code requests. Please wait a few minutes.",
+        )
+
+    code = await create_verification_code(db, body.email)
+    send_verification_code(body.email, code)
+
+    return MessageResponse(
+        message="Verification code sent to your email",
+        email=body.email,
     )
 
 
@@ -129,12 +189,69 @@ async def login_email(body: LoginRequest, db: AsyncSession = Depends(get_db)):
             detail="Invalid email or password",
         )
 
+    if not user.email_verified:
+        # User exists but not verified — send a new code
+        code = await create_verification_code(db, body.email)
+        send_verification_code(body.email, code)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email not verified. A new verification code has been sent.",
+        )
+
     token = create_access_token(user.id, user.telegram_id, user.role.value)
     return AuthResponse(
         token=token,
         user=UserOut.model_validate(user),
         is_new_user=False,
     )
+
+
+@router.post("/forgot-password", response_model=MessageResponse)
+async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Send password reset code to email."""
+    from sqlalchemy import select
+    result = await db.execute(select(User).where(User.email == body.email.lower().strip()))
+    user = result.scalar_one_or_none()
+
+    # Always return success to prevent email enumeration
+    if not user:
+        return MessageResponse(message="If this email exists, a reset code has been sent.")
+
+    if not await can_resend_code(db, body.email):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many requests. Please wait a few minutes.",
+        )
+
+    code = await create_verification_code(db, body.email)
+    send_password_reset_code(body.email, code)
+
+    return MessageResponse(message="If this email exists, a reset code has been sent.")
+
+
+@router.post("/reset-password", response_model=MessageResponse)
+async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Reset password using verification code."""
+    valid = await verify_email_code(db, body.email, body.code)
+
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired code",
+        )
+
+    from sqlalchemy import select
+    result = await db.execute(select(User).where(User.email == body.email.lower().strip()))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    user.password_hash = hash_password(body.new_password)
+    user.email_verified = True  # Verified through reset code
+    await db.commit()
+
+    return MessageResponse(message="Password has been reset successfully")
 
 
 @router.post("/refresh", response_model=AuthResponse)

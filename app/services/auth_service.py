@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import random
 import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
@@ -8,11 +9,12 @@ from uuid import UUID
 
 import bcrypt
 import jwt
-from sqlalchemy import select
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.user import User, UserRole
+from app.models.verification_code import EmailVerificationCode
 
 
 def hash_password(password: str) -> str:
@@ -191,3 +193,90 @@ async def authenticate_email_user(
     if not verify_password(password, user.password_hash):
         return None
     return user
+
+
+def generate_verification_code() -> str:
+    """Generate a 6-digit verification code."""
+    return f"{random.randint(0, 999999):06d}"
+
+
+async def create_verification_code(db: AsyncSession, email: str) -> str:
+    """Create a new verification code for the email. Invalidates previous unused codes."""
+    # Mark all previous unused codes for this email as used
+    result = await db.execute(
+        select(EmailVerificationCode).where(
+            and_(
+                EmailVerificationCode.email == email.lower().strip(),
+                EmailVerificationCode.used == False,
+            )
+        )
+    )
+    for old_code in result.scalars().all():
+        old_code.used = True
+
+    code = generate_verification_code()
+    verification = EmailVerificationCode(
+        email=email.lower().strip(),
+        code=code,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+    db.add(verification)
+    await db.commit()
+    return code
+
+
+async def verify_email_code(db: AsyncSession, email: str, code: str) -> bool:
+    """Verify a code for the given email. Returns True if valid, False otherwise.
+    Increments attempts counter. Max 5 attempts per code.
+    """
+    result = await db.execute(
+        select(EmailVerificationCode).where(
+            and_(
+                EmailVerificationCode.email == email.lower().strip(),
+                EmailVerificationCode.used == False,
+                EmailVerificationCode.expires_at > datetime.now(timezone.utc),
+            )
+        ).order_by(EmailVerificationCode.created_at.desc())
+    )
+    verification = result.scalar_one_or_none()
+
+    if not verification:
+        return False
+
+    verification.attempts += 1
+
+    if verification.attempts > 5:
+        verification.used = True  # exhausted attempts
+        await db.commit()
+        return False
+
+    if verification.code != code:
+        await db.commit()
+        return False
+
+    # Code matches — mark as used and verify the user
+    verification.used = True
+    user_result = await db.execute(
+        select(User).where(User.email == email.lower().strip())
+    )
+    user = user_result.scalar_one_or_none()
+    if user:
+        user.email_verified = True
+
+    await db.commit()
+    return True
+
+
+async def can_resend_code(db: AsyncSession, email: str) -> bool:
+    """Check if a new code can be sent (max 3 codes per 10 minutes per email)."""
+    ten_min_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
+    result = await db.execute(
+        select(EmailVerificationCode).where(
+            and_(
+                EmailVerificationCode.email == email.lower().strip(),
+                EmailVerificationCode.created_at > ten_min_ago,
+            )
+        )
+    )
+    recent_codes = result.scalars().all()
+    return len(recent_codes) < 3

@@ -8,6 +8,7 @@ class UserOut(BaseModel):
     telegram_id: int | None = None
     telegram_username: str | None = None
     email: str | None = None
+    email_verified: bool = False
     first_name: str
     last_name: str | None = None
     photo_url: str | None = None
