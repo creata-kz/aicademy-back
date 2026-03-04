@@ -115,10 +115,18 @@ async def register_email(body: RegisterRequest, db: AsyncSession = Depends(get_d
     )
 
     if not is_new:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Email already registered",
-        )
+        if not user.email_verified:
+            # Not verified yet — update password and resend code
+            user.password_hash = hash_password(body.password)
+            user.first_name = body.first_name
+            if body.last_name is not None:
+                user.last_name = body.last_name
+            await db.commit()
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email already registered",
+            )
 
     # Generate and send verification code
     code = await create_verification_code(db, body.email)
