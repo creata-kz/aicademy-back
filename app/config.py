@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     JWT_EXPIRE_MINUTES: int = 60
     DEV_MODE: bool = False
     RESEND_API_KEY: str = ""
-    FROM_EMAIL: str = "AI Academy <noreply@aicademy.kz>"
+    FROM_EMAIL: str = "AI Academy <onboarding@resend.dev>"
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
     @field_validator("CORS_ORIGINS", mode="before")
