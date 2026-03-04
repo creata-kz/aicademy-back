@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +11,7 @@ from app.services.auth_service import create_access_token, get_or_create_user
 from app.services.telegram_bot import (
     create_auth_session,
     get_auth_session,
+    confirm_auth_session,
     handle_update,
 )
 
@@ -36,6 +38,34 @@ async def init_telegram_bot_auth(body: TelegramBotInitRequest = TelegramBotInitR
         "token": token,
         "bot_url": f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}?start=auth_{token}",
     }
+
+
+@router.get("/auth/telegram-bot/confirm-redirect")
+async def confirm_redirect(
+    token: str = Query(...),
+    tg_id: int = Query(...),
+    first_name: str = Query("User"),
+    last_name: str = Query(""),
+    username: str = Query(""),
+):
+    """Confirm auth session via URL click and redirect to website."""
+    session = get_auth_session(token)
+
+    if not session or session["status"] != "pending":
+        return RedirectResponse(url=session.get("return_url", "/") if session else "/")
+
+    confirm_auth_session(token, tg_id, {
+        "id": tg_id,
+        "first_name": first_name,
+        "last_name": last_name or None,
+        "username": username or None,
+    })
+
+    return_url = session.get("return_url", "")
+    if return_url:
+        return RedirectResponse(url=return_url)
+
+    return {"status": "confirmed", "message": "You can close this tab and return to the website."}
 
 
 @router.get("/auth/telegram-bot/status/{token}")

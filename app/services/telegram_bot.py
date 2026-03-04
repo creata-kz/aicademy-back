@@ -1,11 +1,19 @@
 """Telegram Bot service for web auth via bot confirmation."""
 
+import os
 import secrets
 import time
 
 import httpx
 
 from app.config import settings
+
+
+def _get_backend_url() -> str:
+    domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+    if domain:
+        return f"https://{domain}"
+    return "http://localhost:8000"
 
 # In-memory auth sessions: token → {telegram_id, status, created_at}
 _auth_sessions: dict[str, dict] = {}
@@ -108,15 +116,19 @@ async def handle_update(update: dict):
                 return
 
             first_name = user.get("first_name", "User")
+            backend_url = _get_backend_url()
+            confirm_url = f"{backend_url}/api/v1/auth/telegram-bot/confirm-redirect?token={token}&tg_id={user['id']}&first_name={user.get('first_name', 'User')}&last_name={user.get('last_name', '')}&username={user.get('username', '')}"
+
             await send_telegram_message(
                 chat_id,
-                f"Hi {first_name}! Confirm login to <b>AI Academy</b>?",
+                f"Hi {first_name}! Tap the button to log in to <b>AI Academy</b>:",
                 reply_markup={
                     "inline_keyboard": [[
                         {
                             "text": "Confirm Login",
-                            "callback_data": f"auth_confirm:{token}",
+                            "url": confirm_url,
                         },
+                    ], [
                         {
                             "text": "Cancel",
                             "callback_data": f"auth_cancel:{token}",
