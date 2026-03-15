@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -33,11 +33,41 @@ from app.services.email_service import send_verification_code, send_password_res
 from app.api.deps import get_current_user
 from app.models.user import User
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+AUTH_COOKIE_NAME = "access_token"
+
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def set_auth_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite="none" if settings.COOKIE_SECURE else "lax",
+        domain=settings.COOKIE_DOMAIN,
+        path="/",
+        max_age=settings.JWT_EXPIRE_MINUTES * 60,
+    )
+
+
+def clear_auth_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=AUTH_COOKIE_NAME,
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite="none" if settings.COOKIE_SECURE else "lax",
+        domain=settings.COOKIE_DOMAIN,
+        path="/",
+    )
+
+
 @router.post("/telegram", response_model=AuthResponse)
-async def auth_telegram(body: TelegramAuthRequest, db: AsyncSession = Depends(get_db)):
+async def auth_telegram(body: TelegramAuthRequest, response: Response, db: AsyncSession = Depends(get_db)):
     """Authenticate via Telegram Mini App initData or dev mode."""
     # Try Telegram validation first
     tg_user = validate_telegram_init_data(body.init_data)
@@ -68,6 +98,7 @@ async def auth_telegram(body: TelegramAuthRequest, db: AsyncSession = Depends(ge
     )
 
     token = create_access_token(user.id, user.telegram_id, user.role.value)
+    set_auth_cookie(response, token)
 
     return AuthResponse(
         token=token,
@@ -77,7 +108,7 @@ async def auth_telegram(body: TelegramAuthRequest, db: AsyncSession = Depends(ge
 
 
 @router.post("/telegram-widget", response_model=AuthResponse)
-async def auth_telegram_widget(body: TelegramWidgetAuth, db: AsyncSession = Depends(get_db)):
+async def auth_telegram_widget(body: TelegramWidgetAuth, response: Response, db: AsyncSession = Depends(get_db)):
     """Authenticate via Telegram Login Widget (web users)."""
     widget_data = body.model_dump()
     validated = validate_telegram_login_widget(widget_data)
@@ -95,6 +126,7 @@ async def auth_telegram_widget(body: TelegramWidgetAuth, db: AsyncSession = Depe
     )
 
     token = create_access_token(user.id, user.telegram_id, user.role.value)
+    set_auth_cookie(response, token)
 
     return AuthResponse(
         token=token,
@@ -117,6 +149,11 @@ async def register_email(body: RegisterRequest, db: AsyncSession = Depends(get_d
     if not is_new:
         if not user.email_verified:
             # Not verified yet — update password and resend code
+            if not await can_resend_code(db, body.email):
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many code requests. Please wait a few minutes.",
+                )
             user.password_hash = hash_password(body.password)
             user.first_name = body.first_name
             if body.last_name is not None:
@@ -130,7 +167,12 @@ async def register_email(body: RegisterRequest, db: AsyncSession = Depends(get_d
 
     # Generate and send verification code
     code = await create_verification_code(db, body.email)
-    send_verification_code(body.email, code)
+    if not send_verification_code(body.email, code):
+        logger.error("Failed to send verification code to %s", body.email)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to send verification email. Please try again later.",
+        )
 
     return MessageResponse(
         message="Verification code sent to your email",
@@ -139,7 +181,7 @@ async def register_email(body: RegisterRequest, db: AsyncSession = Depends(get_d
 
 
 @router.post("/verify-email", response_model=AuthResponse)
-async def verify_email(body: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+async def verify_email(body: VerifyEmailRequest, response: Response, db: AsyncSession = Depends(get_db)):
     """Verify email with 6-digit code. Returns JWT on success."""
     valid = await verify_email_code(db, body.email, body.code)
 
@@ -160,11 +202,16 @@ async def verify_email(body: VerifyEmailRequest, db: AsyncSession = Depends(get_
             detail="User not found",
         )
 
+    # User is "new" only if they have no completed activity yet (just registered)
+    is_new = not user.onboarding_complete and user.xp == 0
+
     token = create_access_token(user.id, user.telegram_id, user.role.value)
+    set_auth_cookie(response, token)
+
     return AuthResponse(
         token=token,
         user=UserOut.model_validate(user),
-        is_new_user=True,
+        is_new_user=is_new,
     )
 
 
@@ -178,7 +225,12 @@ async def resend_code(body: ResendCodeRequest, db: AsyncSession = Depends(get_db
         )
 
     code = await create_verification_code(db, body.email)
-    send_verification_code(body.email, code)
+    if not send_verification_code(body.email, code):
+        logger.error("Failed to resend verification code to %s", body.email)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to send verification email. Please try again later.",
+        )
 
     return MessageResponse(
         message="Verification code sent to your email",
@@ -187,7 +239,7 @@ async def resend_code(body: ResendCodeRequest, db: AsyncSession = Depends(get_db
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login_email(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login_email(body: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
     """Login with email and password."""
     user = await authenticate_email_user(db, body.email, body.password)
 
@@ -199,14 +251,17 @@ async def login_email(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     if not user.email_verified:
         # User exists but not verified — send a new code
-        code = await create_verification_code(db, body.email)
-        send_verification_code(body.email, code)
+        if await can_resend_code(db, body.email):
+            code = await create_verification_code(db, body.email)
+            send_verification_code(body.email, code)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Email not verified. A new verification code has been sent.",
         )
 
     token = create_access_token(user.id, user.telegram_id, user.role.value)
+    set_auth_cookie(response, token)
+
     return AuthResponse(
         token=token,
         user=UserOut.model_validate(user),
@@ -232,7 +287,8 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
         )
 
     code = await create_verification_code(db, body.email)
-    send_password_reset_code(body.email, code)
+    if not send_password_reset_code(body.email, code):
+        logger.error("Failed to send password reset code to %s", body.email)
 
     return MessageResponse(message="If this email exists, a reset code has been sent.")
 
@@ -263,11 +319,20 @@ async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(
 
 
 @router.post("/refresh", response_model=AuthResponse)
-async def refresh_token(user: User = Depends(get_current_user)):
+async def refresh_token(response: Response, user: User = Depends(get_current_user)):
     """Refresh JWT token."""
     token = create_access_token(user.id, user.telegram_id, user.role.value)
+    set_auth_cookie(response, token)
+
     return AuthResponse(
         token=token,
         user=UserOut.model_validate(user),
         is_new_user=False,
     )
+
+
+@router.post("/logout")
+async def logout(response: Response):
+    """Logout — clear auth cookie."""
+    clear_auth_cookie(response)
+    return {"message": "Logged out"}

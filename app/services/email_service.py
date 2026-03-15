@@ -1,21 +1,22 @@
+import logging
+
 import resend
+
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def send_verification_code(to_email: str, code: str) -> bool:
     """Send 6-digit verification code via Resend. Returns True on success."""
-    print(f"[EMAIL] Attempting to send code to {to_email}")
-    print(f"[EMAIL] RESEND_API_KEY present: {bool(settings.RESEND_API_KEY)}, starts: {settings.RESEND_API_KEY[:8] if settings.RESEND_API_KEY else 'EMPTY'}")
-    print(f"[EMAIL] FROM_EMAIL: {settings.FROM_EMAIL}")
-
     if not settings.RESEND_API_KEY:
-        print(f"[DEV] Verification code for {to_email}: {code}")
+        logger.info("[DEV] Verification code for %s: %s", to_email, code)
         return True
 
     resend.api_key = settings.RESEND_API_KEY
 
     try:
-        result = resend.Emails.send({
+        resend.Emails.send({
             "from": settings.FROM_EMAIL,
             "to": [to_email],
             "subject": f"Your verification code: {code}",
@@ -31,17 +32,16 @@ def send_verification_code(to_email: str, code: str) -> bool:
                 f'</div>'
             ),
         })
-        print(f"[EMAIL] Send result: {result}")
         return True
     except Exception as e:
-        print(f"[ERROR] Failed to send email to {to_email}: {type(e).__name__}: {e}")
+        logger.error("Failed to send email to %s: %s", to_email, e)
         return False
 
 
 def send_password_reset_code(to_email: str, code: str) -> bool:
     """Send password reset code via Resend."""
     if not settings.RESEND_API_KEY:
-        print(f"[DEV] Password reset code for {to_email}: {code}")
+        logger.info("[DEV] Password reset code for %s: %s", to_email, code)
         return True
 
     resend.api_key = settings.RESEND_API_KEY
@@ -65,5 +65,5 @@ def send_password_reset_code(to_email: str, code: str) -> bool:
         })
         return True
     except Exception as e:
-        print(f"[ERROR] Failed to send reset email to {to_email}: {e}")
+        logger.error("Failed to send reset email to %s: %s", to_email, e)
         return False

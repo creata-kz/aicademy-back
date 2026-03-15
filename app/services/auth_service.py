@@ -162,7 +162,7 @@ async def get_or_create_email_user(
     last_name: str | None = None,
 ) -> tuple[User, bool]:
     """Register a new email user. Returns (user, True) or raises if email exists."""
-    result = await db.execute(select(User).where(User.email == email))
+    result = await db.execute(select(User).where(User.email == email.lower().strip()))
     existing = result.scalar_one_or_none()
     if existing:
         return existing, False  # email already taken

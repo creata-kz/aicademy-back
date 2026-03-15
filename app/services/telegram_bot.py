@@ -1,8 +1,11 @@
 """Telegram Bot service for web auth via bot confirmation."""
 
+import hashlib
+import hmac
 import os
 import secrets
 import time
+from urllib.parse import urlencode, quote
 
 import httpx
 
@@ -81,6 +84,21 @@ async def answer_callback_query(callback_query_id: str, text: str = ""):
         })
 
 
+def _sign_confirm_params(params: dict) -> str:
+    """Create HMAC-SHA256 signature for confirm-redirect params."""
+    sorted_pairs = sorted(params.items())
+    data_string = "&".join(f"{k}={v}" for k, v in sorted_pairs)
+    return hmac.new(
+        settings.JWT_SECRET.encode(), data_string.encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def verify_confirm_signature(params: dict, signature: str) -> bool:
+    """Verify HMAC signature of confirm-redirect params."""
+    expected = _sign_confirm_params(params)
+    return hmac.compare_digest(expected, signature)
+
+
 async def edit_message_text(chat_id: int, message_id: int, text: str):
     """Edit a message."""
     url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/editMessageText"
@@ -117,7 +135,15 @@ async def handle_update(update: dict):
 
             first_name = user.get("first_name", "User")
             backend_url = _get_backend_url()
-            confirm_url = f"{backend_url}/api/v1/auth/telegram-bot/confirm-redirect?token={token}&tg_id={user['id']}&first_name={user.get('first_name', 'User')}&last_name={user.get('last_name', '')}&username={user.get('username', '')}"
+            params = {
+                "token": token,
+                "tg_id": str(user["id"]),
+                "first_name": user.get("first_name", "User"),
+                "last_name": user.get("last_name", "") or "",
+                "username": user.get("username", "") or "",
+            }
+            params["sig"] = _sign_confirm_params(params)
+            confirm_url = f"{backend_url}/api/v1/auth/telegram-bot/confirm-redirect?{urlencode(params)}"
 
             await send_telegram_message(
                 chat_id,

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Response, status, Request, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,11 +8,13 @@ from app.config import settings
 from app.schemas.user import UserOut
 from app.schemas.auth import AuthResponse
 from app.services.auth_service import create_access_token, get_or_create_user
+from app.api.v1.auth import set_auth_cookie
 from app.services.telegram_bot import (
     create_auth_session,
     get_auth_session,
     confirm_auth_session,
     handle_update,
+    verify_confirm_signature,
 )
 
 router = APIRouter(tags=["bot"])
@@ -47,8 +49,20 @@ async def confirm_redirect(
     first_name: str = Query("User"),
     last_name: str = Query(""),
     username: str = Query(""),
+    sig: str = Query(...),
 ):
     """Confirm auth session via URL click and redirect to website."""
+    # Verify HMAC signature to prevent spoofing
+    params = {
+        "token": token,
+        "tg_id": str(tg_id),
+        "first_name": first_name,
+        "last_name": last_name,
+        "username": username,
+    }
+    if not verify_confirm_signature(params, sig):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
+
     session = get_auth_session(token)
 
     if not session or session["status"] != "pending":
@@ -69,7 +83,7 @@ async def confirm_redirect(
 
 
 @router.get("/auth/telegram-bot/status/{token}")
-async def check_telegram_bot_auth(token: str, db: AsyncSession = Depends(get_db)):
+async def check_telegram_bot_auth(token: str, response: Response, db: AsyncSession = Depends(get_db)):
     """Poll auth session status. Returns JWT when confirmed."""
     session = get_auth_session(token)
 
@@ -94,6 +108,7 @@ async def check_telegram_bot_auth(token: str, db: AsyncSession = Depends(get_db)
         )
 
         jwt_token = create_access_token(user.id, user.telegram_id, user.role.value)
+        set_auth_cookie(response, jwt_token)
 
         return {
             "status": "confirmed",

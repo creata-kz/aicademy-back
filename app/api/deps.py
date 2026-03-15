@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Cookie, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,14 +9,28 @@ from app.database import get_db
 from app.models.user import User
 from app.services.auth_service import decode_access_token
 
-security = HTTPBearer()
+# auto_error=False so we can fall back to cookie if no header
+security = HTTPBearer(auto_error=False)
+
+AUTH_COOKIE_NAME = "access_token"
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    access_token: str | None = Cookie(None, alias=AUTH_COOKIE_NAME),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    payload = decode_access_token(credentials.credentials)
+    # Try Authorization header first, then cookie
+    token: str | None = None
+    if credentials:
+        token = credentials.credentials
+    elif access_token:
+        token = access_token
+
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    payload = decode_access_token(token)
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
