@@ -14,9 +14,15 @@ def send_verification_code(to_email: str, code: str) -> bool:
         return True
 
     resend.api_key = settings.RESEND_API_KEY
+    logger.info(
+        "Sending verification email to %s from %s (key: %s...)",
+        to_email,
+        settings.FROM_EMAIL,
+        settings.RESEND_API_KEY[:8],
+    )
 
     try:
-        resend.Emails.send({
+        result = resend.Emails.send({
             "from": settings.FROM_EMAIL,
             "to": [to_email],
             "subject": f"Your verification code: {code}",
@@ -32,9 +38,10 @@ def send_verification_code(to_email: str, code: str) -> bool:
                 f'</div>'
             ),
         })
+        logger.info("Resend response for %s: %s", to_email, result)
         return True
     except Exception as e:
-        logger.error("Failed to send email to %s: %s", to_email, e)
+        logger.exception("Failed to send email to %s", to_email)
         return False
 
 
@@ -45,9 +52,10 @@ def send_password_reset_code(to_email: str, code: str) -> bool:
         return True
 
     resend.api_key = settings.RESEND_API_KEY
+    logger.info("Sending password reset email to %s from %s", to_email, settings.FROM_EMAIL)
 
     try:
-        resend.Emails.send({
+        result = resend.Emails.send({
             "from": settings.FROM_EMAIL,
             "to": [to_email],
             "subject": f"Password reset code: {code}",
@@ -63,7 +71,8 @@ def send_password_reset_code(to_email: str, code: str) -> bool:
                 f'</div>'
             ),
         })
+        logger.info("Resend reset response for %s: %s", to_email, result)
         return True
     except Exception as e:
-        logger.error("Failed to send reset email to %s: %s", to_email, e)
+        logger.exception("Failed to send reset email to %s", to_email)
         return False

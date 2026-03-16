@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info(
+        "Email config: FROM_EMAIL=%s, RESEND_API_KEY=%s",
+        settings.FROM_EMAIL,
+        f"{settings.RESEND_API_KEY[:8]}..." if settings.RESEND_API_KEY else "<NOT SET>",
+    )
     # Set Telegram bot webhook on startup
     import httpx
     railway_url = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
